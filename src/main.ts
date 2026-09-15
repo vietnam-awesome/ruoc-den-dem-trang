@@ -13,7 +13,7 @@ app.innerHTML = `
         <span class="brand-mark">🏮</span>
         <span>
           <strong>Rước Đèn Đêm Trăng</strong>
-          <small>Lantern Parade · 3D</small>
+          <small>Lantern Parade · PixiJS</small>
         </span>
       </div>
       <button id="soundBtn" class="icon-btn" type="button" aria-label="Bật hoặc tắt âm thanh">🔊</button>
@@ -48,7 +48,7 @@ app.innerHTML = `
         <h1>Rước Đèn<br/><em>Đêm Trăng</em></h1>
         <p>Dẫn đoàn rước qua phố đêm, mời thêm bạn nhỏ, nhặt bánh Trung Thu và thắp sáng vầng trăng trước khi thời gian kết thúc.</p>
         <div class="feature-row" aria-label="Điểm nổi bật">
-          <span>✨ 3D low-poly</span><span>📱 Mobile-first</span><span>🏆 High score</span>
+          <span>✨ 2.5D illustrated</span><span>⚡ PixiJS</span><span>📱 Mobile-first</span>
         </div>
         <button id="playBtn" class="primary-btn" type="button"><span>Bắt đầu rước đèn</span><b>PLAY</b></button>
         <p class="controls-hint"><kbd>←</kbd><kbd>→</kbd> hoặc vuốt màn hình để đổi làn</p>
@@ -79,7 +79,7 @@ app.innerHTML = `
       </div>
     </section>
 
-    <footer class="footer-note">A tiny celebration of Vietnamese Mid-Autumn Festival · Made for the web</footer>
+    <footer class="footer-note">A tiny celebration of Vietnamese Mid-Autumn Festival · Powered by PixiJS</footer>
   </section>
 `;
 
