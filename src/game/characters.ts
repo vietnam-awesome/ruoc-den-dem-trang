@@ -1,5 +1,5 @@
 import { AnimatedSprite, Assets, Container, Graphics, type Texture } from 'pixi.js';
-import { createStarLantern } from './objects';
+import { createStarLantern } from './objectsLegacy';
 
 const RAW_BASE = 'https://raw.githubusercontent.com/shorepine/kenney/main/2d/Toon%20Characters';
 
@@ -21,33 +21,26 @@ function frameUrls(index: number): string[] {
 }
 
 const ALL_CHARACTER_URLS = PROFILES.flatMap((_, index) => frameUrls(index));
+const preloadPromise = Assets.load(ALL_CHARACTER_URLS);
 
 export async function preloadCharacterAssets(): Promise<void> {
-  await Assets.load(ALL_CHARACTER_URLS);
+  await preloadPromise;
 }
 
 export type CharacterArt = Container & {
   bobSeed: number;
   lanternArt: Container | null;
-  runnerArt: AnimatedSprite;
+  runnerArt: AnimatedSprite | null;
 };
 
-export function createCharacter(index = 0, withLantern = true): CharacterArt {
-  const group = new Container() as CharacterArt;
-  group.bobSeed = index * 0.73 + 0.3;
-  group.lanternArt = null;
-
-  const shadow = new Graphics();
-  shadow.ellipse(0, 5, 36, 11).fill({ color: 0x050c19, alpha: 0.34 });
-  group.addChild(shadow);
+function attachRunner(group: CharacterArt, index: number): void {
+  if (group.destroyed || group.runnerArt) return;
 
   const textures = frameUrls(index)
     .map((url) => Assets.get<Texture>(url))
     .filter((texture): texture is Texture => Boolean(texture));
 
-  if (textures.length === 0) {
-    throw new Error('Character textures were not preloaded');
-  }
+  if (textures.length !== FRAME_IDS.length) return;
 
   const runner = new AnimatedSprite(textures);
   runner.anchor.set(0.5, 1);
@@ -56,8 +49,26 @@ export function createCharacter(index = 0, withLantern = true): CharacterArt {
   runner.height = 178;
   runner.scale.x = runner.scale.y;
   runner.play();
-  group.addChild(runner);
+  group.addChildAt(runner, 1);
   group.runnerArt = runner;
+}
+
+export function createCharacter(index = 0, withLantern = true): CharacterArt {
+  const group = new Container() as CharacterArt;
+  group.bobSeed = index * 0.73 + 0.3;
+  group.lanternArt = null;
+  group.runnerArt = null;
+
+  const shadow = new Graphics();
+  shadow.ellipse(0, 5, 36, 11).fill({ color: 0x050c19, alpha: 0.34 });
+  group.addChild(shadow);
+
+  attachRunner(group, index);
+  if (!group.runnerArt) {
+    void preloadPromise.then(() => attachRunner(group, index)).catch(() => {
+      // Keep gameplay alive even if a third-party texture endpoint is temporarily unavailable.
+    });
+  }
 
   if (withLantern) {
     const pole = new Graphics();
