@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import {
   createCharacter,
+  createCloudLayer,
+  createFireflyField,
   createMoon,
   createMooncake,
   createObstacle,
@@ -50,7 +52,7 @@ export class LanternParadeGame {
   private readonly canvasHost: HTMLElement;
   private readonly events: GameEvents;
   private readonly scene = new THREE.Scene();
-  private readonly camera = new THREE.PerspectiveCamera(52, 1, 0.1, 240);
+  private readonly camera = new THREE.PerspectiveCamera(48, 1, 0.1, 240);
   private readonly renderer: THREE.WebGLRenderer;
   private readonly clock = new THREE.Clock();
   private readonly player = createCharacter(0, true);
@@ -58,9 +60,10 @@ export class LanternParadeGame {
   private readonly entities: Entity[] = [];
   private readonly streetSegments: THREE.Group[] = [];
   private readonly followers: THREE.Group[] = [];
-  private readonly ambientLight = new THREE.HemisphereLight(0x7aa5e8, 0x17213b, 1.45);
-  private readonly moonLight = new THREE.DirectionalLight(0xffe5a8, 2.1);
-  private readonly lanternLight = new THREE.PointLight(0xff9d5c, 2.2, 11, 2);
+  private readonly ambientLight = new THREE.HemisphereLight(0x7396ce, 0x1b1017, 1.28);
+  private readonly moonLight = new THREE.DirectionalLight(0xffdda2, 2.15);
+  private readonly lanternLight = new THREE.PointLight(0xff8d45, 9, 15, 2);
+  private readonly rimLight = new THREE.PointLight(0x5578ff, 7, 30, 2);
   private readonly reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   private running = false;
@@ -80,10 +83,10 @@ export class LanternParadeGame {
     this.events = events;
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.75));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.6));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.08;
+    this.renderer.toneMappingExposure = 1.14;
     this.renderer.domElement.setAttribute('aria-label', 'Khung cảnh game 3D Rước Đèn Đêm Trăng');
     this.canvasHost.appendChild(this.renderer.domElement);
 
@@ -123,19 +126,23 @@ export class LanternParadeGame {
   }
 
   private setupScene(): void {
-    this.scene.background = new THREE.Color(0x07162d);
-    this.scene.fog = new THREE.FogExp2(0x07162d, 0.014);
+    this.scene.background = new THREE.Color(0x030a18);
+    this.scene.fog = new THREE.FogExp2(0x07101f, 0.0118);
 
-    this.camera.position.set(0, 7.4, 12.5);
-    this.camera.lookAt(0, 1.7, -10);
+    this.camera.position.set(0, 5.6, 11.8);
+    this.camera.lookAt(0, 1.45, -13);
 
-    this.moonLight.position.set(-16, 22, -28);
-    this.lanternLight.position.set(0.7, 2.2, 1.2);
-    this.scene.add(this.ambientLight, this.moonLight, this.lanternLight);
+    this.moonLight.position.set(-16, 23, -25);
+    this.lanternLight.position.set(0.8, 2.35, 2.2);
+    this.rimLight.position.set(-6.5, 8, 3);
+    this.scene.add(this.ambientLight, this.moonLight, this.lanternLight, this.rimLight);
 
     const moon = createMoon();
-    moon.position.set(-18, 25, -105);
-    this.scene.add(moon, createStarField(this.reducedMotion ? 120 : 280));
+    moon.position.set(-18, 25, -108);
+    this.scene.add(moon);
+    this.scene.add(createStarField(this.reducedMotion ? 130 : 320));
+    this.scene.add(createFireflyField(this.reducedMotion ? 34 : 82));
+    this.scene.add(createCloudLayer());
 
     this.parade.add(this.player);
     this.parade.position.set(0, 0, PLAYER_Z);
@@ -148,11 +155,11 @@ export class LanternParadeGame {
     }
 
     const laneMarkers = new THREE.Group();
-    const markerMaterial = new THREE.MeshBasicMaterial({ color: 0xe4c574, transparent: true, opacity: 0.14 });
+    const markerMaterial = new THREE.MeshBasicMaterial({ color: 0xe9c873, transparent: true, opacity: 0.085 });
     for (const x of [-1.5, 1.5]) {
       for (let z = -75; z < 14; z += 6) {
-        const marker = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.015, 2.4), markerMaterial);
-        marker.position.set(x, 0.04, z);
+        const marker = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.012, 2.1), markerMaterial);
+        marker.position.set(x, 0.025, z);
         laneMarkers.add(marker);
       }
     }
@@ -172,9 +179,12 @@ export class LanternParadeGame {
     this.laneIndex = 1;
     this.targetX = 0;
     this.parade.position.x = 0;
-    this.ambientLight.intensity = 1.45;
-    this.moonLight.intensity = 2.1;
-    this.renderer.toneMappingExposure = 1.08;
+    this.camera.position.x = 0;
+    this.ambientLight.intensity = 1.28;
+    this.moonLight.intensity = 2.15;
+    this.lanternLight.intensity = 9;
+    this.rimLight.intensity = 7;
+    this.renderer.toneMappingExposure = 1.14;
 
     for (const entity of this.entities) this.scene.remove(entity.object);
     this.entities.length = 0;
@@ -220,6 +230,7 @@ export class LanternParadeGame {
     const easing = 1 - Math.exp(-delta * 12);
     this.parade.position.x = THREE.MathUtils.lerp(this.parade.position.x, this.targetX, easing);
     this.animateParade(this.elapsed);
+    this.updateCamera(delta);
     this.updateStreet(speed, delta);
     this.updateEntities(speed, delta);
 
@@ -235,7 +246,20 @@ export class LanternParadeGame {
     const t = performance.now() * 0.001;
     this.player.rotation.y = Math.sin(t * 0.7) * 0.05;
     this.player.position.y = Math.sin(t * 1.8) * 0.03;
+    this.camera.position.x = THREE.MathUtils.lerp(this.camera.position.x, Math.sin(t * 0.22) * 0.34, 0.025);
+    this.camera.position.y = 5.6 + Math.sin(t * 0.35) * 0.045;
+    this.camera.lookAt(0, 1.45, -13);
     this.updateStreet(1.1, delta);
+  }
+
+  private updateCamera(delta: number): void {
+    if (this.reducedMotion) return;
+    const follow = 1 - Math.exp(-delta * 4.2);
+    const targetCameraX = this.parade.position.x * 0.16;
+    this.camera.position.x = THREE.MathUtils.lerp(this.camera.position.x, targetCameraX, follow);
+    this.camera.position.y = 5.6 + Math.sin(this.elapsed * 2.1) * 0.025;
+    this.camera.lookAt(this.parade.position.x * 0.06, 1.45, -13);
+    this.lanternLight.position.x = this.parade.position.x + 0.8;
   }
 
   private updateStreet(speed: number, delta: number): void {
@@ -259,8 +283,8 @@ export class LanternParadeGame {
       if (!entity) continue;
 
       entity.object.position.z += speed * delta;
-      entity.object.rotation.y += delta * (entity.kind === 'obstacle' ? 0 : 1.25);
-      if (entity.kind !== 'obstacle') entity.object.position.y = 1.25 + Math.sin(this.elapsed * 4 + i) * 0.12;
+      entity.object.rotation.y += delta * (entity.kind === 'obstacle' ? 0 : entity.kind === 'recruit' ? 0.22 : 1.15);
+      if (entity.kind !== 'obstacle') entity.object.position.y = 1.25 + Math.sin(this.elapsed * 4 + i) * 0.1;
 
       if (!entity.collected && Math.abs(entity.object.position.z - PLAYER_Z) < 1.35 && Math.abs(entity.object.position.x - playerX) < 1.2) {
         if (entity.kind === 'obstacle') {
@@ -308,10 +332,11 @@ export class LanternParadeGame {
     if (kind !== 'obstacle' && Math.random() < 0.18) {
       const extraLaneIndex = (laneIndex + 1 + Math.floor(Math.random() * 2)) % LANES.length;
       const extraLane = LANES[extraLaneIndex] ?? 0;
-      const extra = Math.random() < 0.55 ? createMooncake() : createSpark();
+      const extraIsMooncake = Math.random() < 0.55;
+      const extra = extraIsMooncake ? createMooncake() : createSpark();
       extra.position.set(extraLane, 1.25, SPAWN_Z - 5.5);
       this.scene.add(extra);
-      this.entities.push({ object: extra, kind: extra.children.length > 1 ? 'mooncake' : 'spark', lane: extraLane, collected: false });
+      this.entities.push({ object: extra, kind: extraIsMooncake ? 'mooncake' : 'spark', lane: extraLane, collected: false });
     }
   }
 
@@ -336,9 +361,11 @@ export class LanternParadeGame {
 
     if (!this.fullMoon && this.lanterns >= FULL_MOON_TARGET) {
       this.fullMoon = true;
-      this.ambientLight.intensity = 2.15;
-      this.moonLight.intensity = 3.1;
-      this.renderer.toneMappingExposure = 1.22;
+      this.ambientLight.intensity = 1.7;
+      this.moonLight.intensity = 3.25;
+      this.lanternLight.intensity = 13;
+      this.rimLight.intensity = 10;
+      this.renderer.toneMappingExposure = 1.23;
       this.events.onFullMoon();
     }
 
