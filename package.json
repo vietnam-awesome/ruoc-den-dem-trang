@@ -1,6 +1,6 @@
 {
   "name": "ruoc-den-dem-trang",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -10,10 +10,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "three": "0.186.0"
+    "pixi.js": "8.20.1"
   },
   "devDependencies": {
-    "@types/three": "0.186.0",
     "typescript": "6.0.3",
     "vite": "8.2.2"
   },
