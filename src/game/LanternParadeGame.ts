@@ -1,29 +1,49 @@
-import * as THREE from 'three';
+import { Application, Container, Graphics } from 'pixi.js';
 import {
   createCharacter,
-  createCloudLayer,
-  createFireflyField,
+  createCloud,
   createMoon,
   createMooncake,
   createObstacle,
+  createSceneryRow,
   createSpark,
-  createStarField,
-  createStreetSegment,
+  type CharacterArt,
 } from './objects';
 
-const LANES = [-3, 0, 3] as const;
+const LANES = [-1, 0, 1] as const;
 const GAME_DURATION = 75;
 const FULL_MOON_TARGET = 18;
-const PLAYER_Z = 1;
-const SPAWN_Z = -68;
 
 type EntityKind = 'recruit' | 'mooncake' | 'spark' | 'obstacle';
 
 type Entity = {
-  object: THREE.Group;
+  object: Container;
   kind: EntityKind;
   lane: number;
+  depth: number;
   collected: boolean;
+  phase: number;
+};
+
+type SceneryRow = {
+  object: Container;
+  depth: number;
+};
+
+type Firefly = {
+  object: Graphics;
+  x: number;
+  y: number;
+  phase: number;
+  speed: number;
+};
+
+type Burst = {
+  object: Graphics;
+  vx: number;
+  vy: number;
+  life: number;
+  maxLife: number;
 };
 
 export type GameSnapshot = {
@@ -51,24 +71,28 @@ type GameEvents = {
 export class LanternParadeGame {
   private readonly canvasHost: HTMLElement;
   private readonly events: GameEvents;
-  private readonly scene = new THREE.Scene();
-  private readonly camera = new THREE.PerspectiveCamera(48, 1, 0.1, 240);
-  private readonly renderer: THREE.WebGLRenderer;
-  private readonly clock = new THREE.Clock();
-  private readonly player = createCharacter(0, true);
-  private readonly parade = new THREE.Group();
+  private readonly app = new Application();
+  private readonly world = new Container();
+  private readonly background = new Graphics();
+  private readonly stars = new Graphics();
+  private readonly road = new Graphics();
+  private readonly moon = createMoon();
+  private readonly clouds = [createCloud(0), createCloud(1), createCloud(2), createCloud(3)];
+  private readonly fullMoonGlow = new Graphics();
+  private readonly sceneryRows: SceneryRow[] = [];
   private readonly entities: Entity[] = [];
-  private readonly streetSegments: THREE.Group[] = [];
-  private readonly followers: THREE.Group[] = [];
-  private readonly ambientLight = new THREE.HemisphereLight(0x7396ce, 0x1b1017, 1.28);
-  private readonly moonLight = new THREE.DirectionalLight(0xffdda2, 2.15);
-  private readonly lanternLight = new THREE.PointLight(0xff8d45, 9, 15, 2);
-  private readonly rimLight = new THREE.PointLight(0x5578ff, 7, 30, 2);
+  private readonly followers: CharacterArt[] = [];
+  private readonly player = createCharacter(0, true);
+  private readonly fireflies: Firefly[] = [];
+  private readonly bursts: Burst[] = [];
   private readonly reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  private readonly ready: Promise<void>;
 
+  private initialized = false;
+  private pendingStart = false;
   private running = false;
   private laneIndex = 1;
-  private targetX: number = LANES[1];
+  private visualLane = 0;
   private elapsed = 0;
   private spawnAccumulator = 0;
   private score = 0;
@@ -77,41 +101,33 @@ export class LanternParadeGame {
   private combo = 0;
   private fullMoon = false;
   private nextHudAt = 0;
+  private width = 1;
+  private height = 1;
+  private worldScale = 1;
+  private idleTime = 0;
 
   constructor(canvasHost: HTMLElement, events: GameEvents) {
     this.canvasHost = canvasHost;
     this.events = events;
-
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, powerPreference: 'high-performance' });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.6));
-    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.14;
-    this.renderer.domElement.setAttribute('aria-label', 'Khung cảnh game 3D Rước Đèn Đêm Trăng');
-    this.canvasHost.appendChild(this.renderer.domElement);
-
-    this.setupScene();
-    this.resize();
-    window.addEventListener('resize', this.resize);
-    this.renderer.setAnimationLoop(this.animate);
+    this.ready = this.initialize();
   }
 
   start(): void {
-    this.resetRun();
-    this.running = true;
-    this.clock.start();
+    if (!this.initialized) {
+      this.pendingStart = true;
+      return;
+    }
+    this.startRun();
   }
 
   moveLeft(): void {
     if (!this.running) return;
     this.laneIndex = Math.max(0, this.laneIndex - 1);
-    this.targetX = LANES[this.laneIndex] ?? 0;
   }
 
   moveRight(): void {
     if (!this.running) return;
     this.laneIndex = Math.min(LANES.length - 1, this.laneIndex + 1);
-    this.targetX = LANES[this.laneIndex] ?? 0;
   }
 
   isRunning(): boolean {
@@ -119,51 +135,65 @@ export class LanternParadeGame {
   }
 
   dispose(): void {
-    this.renderer.setAnimationLoop(null);
     window.removeEventListener('resize', this.resize);
-    this.renderer.dispose();
-    this.canvasHost.replaceChildren();
+    void this.ready.finally(() => {
+      this.app.ticker.remove(this.animate);
+      this.app.destroy(true);
+    });
   }
 
-  private setupScene(): void {
-    this.scene.background = new THREE.Color(0x030a18);
-    this.scene.fog = new THREE.FogExp2(0x07101f, 0.0118);
+  private async initialize(): Promise<void> {
+    await this.app.init({
+      resizeTo: this.canvasHost,
+      backgroundColor: 0x071326,
+      antialias: true,
+      autoDensity: true,
+      resolution: Math.min(window.devicePixelRatio || 1, 2),
+    });
 
-    this.camera.position.set(0, 5.6, 11.8);
-    this.camera.lookAt(0, 1.45, -13);
+    this.app.canvas.setAttribute('aria-label', 'Khung cảnh Rước Đèn Đêm Trăng 2.5D');
+    this.canvasHost.appendChild(this.app.canvas);
 
-    this.moonLight.position.set(-16, 23, -25);
-    this.lanternLight.position.set(0.8, 2.35, 2.2);
-    this.rimLight.position.set(-6.5, 8, 3);
-    this.scene.add(this.ambientLight, this.moonLight, this.lanternLight, this.rimLight);
+    this.world.sortableChildren = true;
+    this.app.stage.addChild(this.world);
 
-    const moon = createMoon();
-    moon.position.set(-18, 25, -108);
-    this.scene.add(moon);
-    this.scene.add(createStarField(this.reducedMotion ? 130 : 320));
-    this.scene.add(createFireflyField(this.reducedMotion ? 34 : 82));
-    this.scene.add(createCloudLayer());
+    this.background.zIndex = -1000;
+    this.stars.zIndex = -950;
+    this.moon.zIndex = -900;
+    this.road.zIndex = -800;
+    this.fullMoonGlow.zIndex = -850;
+    this.world.addChild(this.background, this.stars, this.fullMoonGlow, this.moon, this.road);
 
-    this.parade.add(this.player);
-    this.parade.position.set(0, 0, PLAYER_Z);
-    this.scene.add(this.parade);
-
-    for (let i = 0; i < 7; i += 1) {
-      const segment = createStreetSegment(11 - i * 18, i);
-      this.streetSegments.push(segment);
-      this.scene.add(segment);
+    for (const cloud of this.clouds) {
+      cloud.zIndex = -880;
+      this.world.addChild(cloud);
     }
 
-    const laneMarkers = new THREE.Group();
-    const markerMaterial = new THREE.MeshBasicMaterial({ color: 0xe9c873, transparent: true, opacity: 0.085 });
-    for (const x of [-1.5, 1.5]) {
-      for (let z = -75; z < 14; z += 6) {
-        const marker = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.012, 2.1), markerMaterial);
-        marker.position.set(x, 0.025, z);
-        laneMarkers.add(marker);
-      }
+    for (let i = 0; i < 8; i += 1) {
+      const row = createSceneryRow(i);
+      const depth = 0.04 + (i / 8) * 0.78;
+      this.sceneryRows.push({ object: row, depth });
+      this.world.addChild(row);
     }
-    this.scene.add(laneMarkers);
+
+    this.player.zIndex = 10000;
+    this.world.addChild(this.player);
+    this.createFireflies();
+
+    this.resize();
+    window.addEventListener('resize', this.resize);
+    this.app.ticker.add(this.animate);
+    this.initialized = true;
+
+    if (this.pendingStart) {
+      this.pendingStart = false;
+      this.startRun();
+    }
+  }
+
+  private startRun(): void {
+    this.resetRun();
+    this.running = true;
   }
 
   private resetRun(): void {
@@ -177,62 +207,63 @@ export class LanternParadeGame {
     this.fullMoon = false;
     this.nextHudAt = 0;
     this.laneIndex = 1;
-    this.targetX = 0;
-    this.parade.position.x = 0;
-    this.camera.position.x = 0;
-    this.ambientLight.intensity = 1.28;
-    this.moonLight.intensity = 2.15;
-    this.lanternLight.intensity = 9;
-    this.rimLight.intensity = 7;
-    this.renderer.toneMappingExposure = 1.14;
+    this.visualLane = 0;
+    this.fullMoonGlow.alpha = 0;
 
-    for (const entity of this.entities) this.scene.remove(entity.object);
+    for (const entity of this.entities) entity.object.destroy({ children: true });
     this.entities.length = 0;
 
-    for (const follower of this.followers) this.parade.remove(follower);
+    for (const follower of this.followers) follower.destroy({ children: true });
     this.followers.length = 0;
 
+    for (const burst of this.bursts) burst.object.destroy();
+    this.bursts.length = 0;
+
+    this.layoutParade(0);
     this.events.onTick(this.snapshot());
   }
 
   private readonly resize = (): void => {
-    const width = this.canvasHost.clientWidth || window.innerWidth;
-    const height = this.canvasHost.clientHeight || window.innerHeight;
-    this.camera.aspect = width / Math.max(height, 1);
-    this.camera.updateProjectionMatrix();
-    this.renderer.setSize(width, height, false);
+    if (!this.initialized && !this.app.renderer) return;
+    this.width = Math.max(this.canvasHost.clientWidth || window.innerWidth, 1);
+    this.height = Math.max(this.canvasHost.clientHeight || window.innerHeight, 1);
+    this.worldScale = Math.min(this.width / 900, this.height / 720);
+    this.redrawStaticScene();
+    this.layoutScenery();
+    this.layoutParade(this.running ? this.elapsed : this.idleTime);
   };
 
   private readonly animate = (): void => {
-    const rawDelta = this.clock.getDelta();
-    const delta = Math.min(rawDelta, 0.05);
+    const delta = Math.min(this.app.ticker.deltaMS / 1000, 0.05);
+    this.idleTime += delta;
 
     if (this.running) this.update(delta);
     else this.updateIdle(delta);
 
-    this.renderer.render(this.scene, this.camera);
+    this.updateBursts(delta);
+    this.updateFireflies(delta);
   };
 
   private update(delta: number): void {
     this.elapsed += delta;
     const secondsLeft = Math.max(0, GAME_DURATION - this.elapsed);
-    const speed = 13.5 + Math.min(this.elapsed * 0.055, 4.8) + (this.fullMoon ? 1.4 : 0);
+    const speedFactor = 1 + Math.min(this.elapsed * 0.0045, 0.28) + (this.fullMoon ? 0.08 : 0);
+    const targetLane = LANES[this.laneIndex] ?? 0;
+    const laneEase = 1 - Math.exp(-delta * 11);
+    this.visualLane += (targetLane - this.visualLane) * laneEase;
 
-    this.score += delta * speed * (this.fullMoon ? 4.2 : 2.6);
+    this.score += delta * 33 * speedFactor * (this.fullMoon ? 1.6 : 1);
     this.spawnAccumulator += delta;
 
-    const spawnEvery = Math.max(0.48, 0.82 - this.elapsed * 0.0025);
+    const spawnEvery = Math.max(0.52, 0.86 - this.elapsed * 0.0026);
     if (this.spawnAccumulator >= spawnEvery) {
       this.spawnAccumulator = 0;
       this.spawnEntity();
     }
 
-    const easing = 1 - Math.exp(-delta * 12);
-    this.parade.position.x = THREE.MathUtils.lerp(this.parade.position.x, this.targetX, easing);
-    this.animateParade(this.elapsed);
-    this.updateCamera(delta);
-    this.updateStreet(speed, delta);
-    this.updateEntities(speed, delta);
+    this.updateScenery(delta, speedFactor);
+    this.updateEntities(delta, speedFactor);
+    this.layoutParade(this.elapsed);
 
     if (this.elapsed >= this.nextHudAt) {
       this.nextHudAt = this.elapsed + 0.08;
@@ -243,60 +274,49 @@ export class LanternParadeGame {
   }
 
   private updateIdle(delta: number): void {
-    const t = performance.now() * 0.001;
-    this.player.rotation.y = Math.sin(t * 0.7) * 0.05;
-    this.player.position.y = Math.sin(t * 1.8) * 0.03;
-    this.camera.position.x = THREE.MathUtils.lerp(this.camera.position.x, Math.sin(t * 0.22) * 0.34, 0.025);
-    this.camera.position.y = 5.6 + Math.sin(t * 0.35) * 0.045;
-    this.camera.lookAt(0, 1.45, -13);
-    this.updateStreet(1.1, delta);
+    this.updateScenery(delta, 0.16);
+    this.layoutParade(this.idleTime);
+    this.moon.rotation = Math.sin(this.idleTime * 0.12) * 0.012;
   }
 
-  private updateCamera(delta: number): void {
-    if (this.reducedMotion) return;
-    const follow = 1 - Math.exp(-delta * 4.2);
-    const targetCameraX = this.parade.position.x * 0.16;
-    this.camera.position.x = THREE.MathUtils.lerp(this.camera.position.x, targetCameraX, follow);
-    this.camera.position.y = 5.6 + Math.sin(this.elapsed * 2.1) * 0.025;
-    this.camera.lookAt(this.parade.position.x * 0.06, 1.45, -13);
-    this.lanternLight.position.x = this.parade.position.x + 0.8;
-  }
-
-  private updateStreet(speed: number, delta: number): void {
-    let minZ = Infinity;
-    for (const segment of this.streetSegments) minZ = Math.min(minZ, segment.position.z);
-
-    for (const segment of this.streetSegments) {
-      segment.position.z += speed * delta;
-      if (segment.position.z > 25) {
-        segment.position.z = minZ - 18;
-        minZ = segment.position.z;
-      }
+  private updateScenery(delta: number, speedFactor: number): void {
+    const rate = delta * 0.075 * speedFactor;
+    for (const row of this.sceneryRows) {
+      row.depth += rate;
+      if (row.depth > 0.86) row.depth = 0.025;
+      this.layoutSceneryRow(row);
     }
+
+    this.clouds.forEach((cloud, index) => {
+      cloud.x += delta * (3 + index * 1.2);
+      if (cloud.x > this.width + 180) cloud.x = -180;
+    });
   }
 
-  private updateEntities(speed: number, delta: number): void {
-    const playerX = this.parade.position.x;
+  private updateEntities(delta: number, speedFactor: number): void {
+    const depthRate = delta * (0.205 + Math.min(this.elapsed * 0.00065, 0.04)) * speedFactor;
 
     for (let i = this.entities.length - 1; i >= 0; i -= 1) {
       const entity = this.entities[i];
       if (!entity) continue;
 
-      entity.object.position.z += speed * delta;
-      entity.object.rotation.y += delta * (entity.kind === 'obstacle' ? 0 : entity.kind === 'recruit' ? 0.22 : 1.15);
-      if (entity.kind !== 'obstacle') entity.object.position.y = 1.25 + Math.sin(this.elapsed * 4 + i) * 0.1;
+      entity.depth += depthRate;
+      entity.phase += delta;
+      this.layoutEntity(entity);
 
-      if (!entity.collected && Math.abs(entity.object.position.z - PLAYER_Z) < 1.35 && Math.abs(entity.object.position.x - playerX) < 1.2) {
+      const laneDistance = Math.abs(entity.lane - this.visualLane);
+      if (!entity.collected && entity.depth >= 0.87 && entity.depth <= 1.015 && laneDistance < 0.42) {
         if (entity.kind === 'obstacle') {
           entity.collected = true;
+          this.burstAt(entity.object.x, entity.object.y - 20 * entity.object.scale.y, 0xff655f, 15);
           this.endGame('obstacle');
           return;
         }
         this.collect(entity);
       }
 
-      if (entity.object.position.z > 18 || entity.collected) {
-        this.scene.remove(entity.object);
+      if (entity.depth > 1.08 || entity.collected) {
+        entity.object.destroy({ children: true });
         this.entities.splice(i, 1);
       }
     }
@@ -308,12 +328,11 @@ export class LanternParadeGame {
     const roll = Math.random();
 
     let kind: EntityKind;
-    let object: THREE.Group;
+    let object: Container;
 
     if (roll < 0.39) {
       kind = 'recruit';
       object = createCharacter(this.lanterns + laneIndex + 1, true);
-      object.scale.setScalar(0.72);
     } else if (roll < 0.64) {
       kind = 'mooncake';
       object = createMooncake();
@@ -325,18 +344,32 @@ export class LanternParadeGame {
       object = createObstacle();
     }
 
-    object.position.set(lane, kind === 'obstacle' ? 0 : 1.25, SPAWN_Z);
-    this.scene.add(object);
-    this.entities.push({ object, kind, lane, collected: false });
+    const entity: Entity = {
+      object,
+      kind,
+      lane,
+      depth: 0.015,
+      collected: false,
+      phase: Math.random() * Math.PI * 2,
+    };
+    this.world.addChild(object);
+    this.entities.push(entity);
+    this.layoutEntity(entity);
 
-    if (kind !== 'obstacle' && Math.random() < 0.18) {
-      const extraLaneIndex = (laneIndex + 1 + Math.floor(Math.random() * 2)) % LANES.length;
-      const extraLane = LANES[extraLaneIndex] ?? 0;
-      const extraIsMooncake = Math.random() < 0.55;
-      const extra = extraIsMooncake ? createMooncake() : createSpark();
-      extra.position.set(extraLane, 1.25, SPAWN_Z - 5.5);
-      this.scene.add(extra);
-      this.entities.push({ object: extra, kind: extraIsMooncake ? 'mooncake' : 'spark', lane: extraLane, collected: false });
+    if (kind !== 'obstacle' && Math.random() < 0.17) {
+      const extraLane = LANES[(laneIndex + 1 + Math.floor(Math.random() * 2)) % LANES.length] ?? 0;
+      const extraKind: EntityKind = Math.random() < 0.55 ? 'mooncake' : 'spark';
+      const extraObject = extraKind === 'mooncake' ? createMooncake() : createSpark();
+      const extra: Entity = {
+        object: extraObject,
+        kind: extraKind,
+        lane: extraLane,
+        depth: -0.12,
+        collected: false,
+        phase: Math.random() * Math.PI * 2,
+      };
+      this.world.addChild(extraObject);
+      this.entities.push(extra);
     }
   }
 
@@ -349,23 +382,23 @@ export class LanternParadeGame {
       this.lanterns += 1;
       this.score += 90 * comboBonus;
       this.addFollower();
+      this.burstAt(entity.object.x, entity.object.y - 22, 0xffb64f, 13);
       this.events.onCollect('recruit');
     } else if (entity.kind === 'mooncake') {
       this.mooncakes += 1;
       this.score += 60 * comboBonus;
+      this.burstAt(entity.object.x, entity.object.y, 0xffc86a, 10);
       this.events.onCollect('mooncake');
     } else if (entity.kind === 'spark') {
       this.score += 42 * comboBonus;
+      this.burstAt(entity.object.x, entity.object.y, 0xffec91, 9);
       this.events.onCollect('spark');
     }
 
     if (!this.fullMoon && this.lanterns >= FULL_MOON_TARGET) {
       this.fullMoon = true;
-      this.ambientLight.intensity = 1.7;
-      this.moonLight.intensity = 3.25;
-      this.lanternLight.intensity = 13;
-      this.rimLight.intensity = 10;
-      this.renderer.toneMappingExposure = 1.23;
+      this.fullMoonGlow.alpha = 1;
+      this.burstAt(this.width * 0.72, this.height * 0.16, 0xffecac, 24);
       this.events.onFullMoon();
     }
 
@@ -373,24 +406,231 @@ export class LanternParadeGame {
   }
 
   private addFollower(): void {
-    if (this.followers.length >= 7) return;
+    if (this.followers.length >= 8) return;
     const follower = createCharacter(this.followers.length + 1, true);
-    follower.scale.setScalar(0.68);
-    const index = this.followers.length;
-    follower.position.set(index % 2 === 0 ? -0.62 : 0.62, 0, 1.65 + index * 1.18);
-    follower.rotation.y = (index % 2 === 0 ? -1 : 1) * 0.06;
     this.followers.push(follower);
-    this.parade.add(follower);
+    this.world.addChild(follower);
   }
 
-  private animateParade(time: number): void {
-    this.player.position.y = Math.abs(Math.sin(time * 7.2)) * 0.055;
-    this.player.rotation.z = Math.sin(time * 7.2) * 0.025;
+  private layoutParade(time: number): void {
+    if (!this.width || !this.height) return;
+    const centerX = this.width / 2;
+    const laneSpread = Math.min(this.width * 0.19, 170);
+    const bounce = this.reducedMotion ? 0 : Math.abs(Math.sin(time * 6.5)) * 4 * this.worldScale;
+
+    this.player.position.set(centerX + this.visualLane * laneSpread, this.height * 0.905 - bounce);
+    const playerScale = Math.max(0.48, this.worldScale * 0.82);
+    this.player.scale.set(playerScale);
+    this.player.rotation = this.reducedMotion ? 0 : Math.sin(time * 6.5) * 0.018;
+    this.player.zIndex = this.height + 1000;
+    if (this.player.lanternArt && !this.reducedMotion) this.player.lanternArt.rotation = Math.sin(time * 4.4) * 0.055;
 
     this.followers.forEach((follower, index) => {
-      follower.position.y = Math.abs(Math.sin(time * 7 + index * 0.8)) * 0.045;
-      follower.rotation.z = Math.sin(time * 7 + index) * 0.02;
+      const depth = Math.max(0.69, 0.855 - index * 0.024);
+      const weave = (index % 2 === 0 ? -1 : 1) * (0.11 + Math.floor(index / 2) * 0.025);
+      const projected = this.project(depth, this.visualLane + weave);
+      const followerBounce = this.reducedMotion ? 0 : Math.abs(Math.sin(time * 6.2 + follower.bobSeed)) * 3 * projected.scale;
+      follower.position.set(projected.x, projected.y - followerBounce);
+      follower.scale.set(projected.scale * 0.76);
+      follower.rotation = this.reducedMotion ? 0 : Math.sin(time * 6.2 + follower.bobSeed) * 0.016;
+      follower.zIndex = projected.y + 20;
+      if (follower.lanternArt && !this.reducedMotion) follower.lanternArt.rotation = Math.sin(time * 4.1 + index) * 0.05;
     });
+  }
+
+  private layoutEntity(entity: Entity): void {
+    const depth = Math.max(-0.06, entity.depth);
+    const projected = this.project(depth, entity.lane);
+    const bob = entity.kind === 'obstacle' || this.reducedMotion ? 0 : Math.sin(entity.phase * 4.1) * 5 * projected.scale;
+    const sizeMultiplier = entity.kind === 'recruit' ? 0.72 : entity.kind === 'obstacle' ? 0.9 : 0.95;
+
+    entity.object.position.set(projected.x, projected.y - bob);
+    entity.object.scale.set(projected.scale * sizeMultiplier);
+    entity.object.zIndex = projected.y + 12;
+
+    if (!this.reducedMotion && entity.kind !== 'obstacle') {
+      entity.object.rotation = Math.sin(entity.phase * 2.5) * 0.04;
+    }
+  }
+
+  private project(depth: number, lane: number): { x: number; y: number; scale: number } {
+    const t = Math.max(0, Math.min(1, depth));
+    const eased = Math.pow(t, 1.35);
+    const horizonY = this.height * 0.255;
+    const bottomY = this.height * 0.91;
+    const laneSpread = this.width * (0.035 + 0.19 * eased);
+    const scale = Math.max(0.12, this.worldScale * (0.18 + 0.87 * eased));
+    return {
+      x: this.width / 2 + lane * laneSpread,
+      y: horizonY + (bottomY - horizonY) * eased,
+      scale,
+    };
+  }
+
+  private layoutScenery(): void {
+    for (const row of this.sceneryRows) this.layoutSceneryRow(row);
+  }
+
+  private layoutSceneryRow(row: SceneryRow): void {
+    const t = Math.max(0, Math.min(1, row.depth));
+    const eased = Math.pow(t, 1.25);
+    const horizonY = this.height * 0.255;
+    const y = horizonY + this.height * 0.67 * eased;
+    const scale = this.worldScale * (0.12 + 0.73 * eased);
+    row.object.position.set(this.width / 2, y);
+    row.object.scale.set(scale);
+    row.object.alpha = 0.42 + t * 0.58;
+    row.object.zIndex = y - 10;
+  }
+
+  private redrawStaticScene(): void {
+    const width = this.width;
+    const height = this.height;
+    const horizonY = height * 0.255;
+
+    this.background.clear();
+    this.background.rect(0, 0, width, height).fill(0x061225);
+    this.background.rect(0, 0, width, height * 0.48).fill({ color: 0x122b50, alpha: 0.34 });
+    this.background.circle(width * 0.72, height * 0.17, Math.max(width, height) * 0.26).fill({ color: 0x36538b, alpha: 0.07 });
+    this.background.rect(0, horizonY - 25, width, height * 0.22).fill({ color: 0x422b4a, alpha: 0.08 });
+
+    this.stars.clear();
+    const starCount = this.reducedMotion ? 80 : 150;
+    for (let i = 0; i < starCount; i += 1) {
+      const x = ((i * 83.17) % 1000) / 1000 * width;
+      const y = (((i * 47.31 + 117) % 1000) / 1000) * height * 0.47;
+      const radius = 0.7 + ((i * 13) % 5) * 0.28;
+      this.stars.circle(x, y, radius).fill({ color: 0xfff2c7, alpha: 0.35 + ((i * 29) % 60) / 100 });
+    }
+
+    this.fullMoonGlow.clear();
+    this.fullMoonGlow.rect(0, 0, width, height).fill({ color: 0xffd885, alpha: 0.055 });
+    this.fullMoonGlow.alpha = this.fullMoon ? 1 : 0;
+
+    this.road.clear();
+    const roadTopHalf = width * 0.075;
+    const roadBottomHalf = Math.min(width * 0.42, 390);
+    this.road.poly([
+      width / 2 - roadTopHalf,
+      horizonY,
+      width / 2 + roadTopHalf,
+      horizonY,
+      width / 2 + roadBottomHalf,
+      height,
+      width / 2 - roadBottomHalf,
+      height,
+    ]).fill(0x16233a);
+
+    this.road.poly([
+      width / 2 - roadTopHalf - width * 0.035,
+      horizonY,
+      width / 2 - roadTopHalf,
+      horizonY,
+      width / 2 - roadBottomHalf,
+      height,
+      Math.max(0, width / 2 - roadBottomHalf - width * 0.09),
+      height,
+    ]).fill(0x4a4c5c);
+
+    this.road.poly([
+      width / 2 + roadTopHalf,
+      horizonY,
+      width / 2 + roadTopHalf + width * 0.035,
+      horizonY,
+      Math.min(width, width / 2 + roadBottomHalf + width * 0.09),
+      height,
+      width / 2 + roadBottomHalf,
+      height,
+    ]).fill(0x4a4c5c);
+
+    for (const lane of [-0.5, 0.5]) {
+      const topX = width / 2 + lane * roadTopHalf * 0.7;
+      const bottomX = width / 2 + lane * roadBottomHalf * 0.73;
+      this.road.moveTo(topX, horizonY + 5).lineTo(bottomX, height).stroke({ color: 0xe5c078, width: 1.4, alpha: 0.13 });
+    }
+
+    this.moon.position.set(width * (width < 700 ? 0.75 : 0.72), height * (width < 700 ? 0.18 : 0.165));
+    this.moon.scale.set(Math.max(0.72, this.worldScale * 1.02));
+
+    const cloudPositions = [
+      [0.11, 0.17, 0.92],
+      [0.38, 0.1, 0.62],
+      [0.64, 0.27, 0.76],
+      [0.88, 0.12, 0.55],
+    ] as const;
+    this.clouds.forEach((cloud, index) => {
+      const position = cloudPositions[index] ?? cloudPositions[0];
+      cloud.position.set(width * position[0], height * position[1]);
+      cloud.scale.set(this.worldScale * position[2]);
+    });
+  }
+
+  private createFireflies(): void {
+    const count = this.reducedMotion ? 10 : 26;
+    for (let i = 0; i < count; i += 1) {
+      const object = new Graphics();
+      const radius = 1.4 + (i % 3) * 0.65;
+      object.circle(0, 0, radius * 3.2).fill({ color: 0xffd977, alpha: 0.035 });
+      object.circle(0, 0, radius).fill({ color: 0xffec9f, alpha: 0.72 });
+      object.zIndex = 9000;
+      this.world.addChild(object);
+      this.fireflies.push({
+        object,
+        x: ((i * 71.3) % 100) / 100,
+        y: 0.36 + (((i * 43.1) % 100) / 100) * 0.5,
+        phase: i * 0.91,
+        speed: 0.55 + (i % 5) * 0.12,
+      });
+    }
+  }
+
+  private updateFireflies(delta: number): void {
+    for (const firefly of this.fireflies) {
+      firefly.phase += delta * firefly.speed;
+      const driftX = Math.sin(firefly.phase * 1.4) * 18;
+      const driftY = Math.cos(firefly.phase * 1.9) * 11;
+      firefly.object.position.set(firefly.x * this.width + driftX, firefly.y * this.height + driftY);
+      firefly.object.alpha = 0.38 + (Math.sin(firefly.phase * 3.2) + 1) * 0.27;
+    }
+  }
+
+  private burstAt(x: number, y: number, color: number, count: number): void {
+    if (this.reducedMotion) return;
+    for (let i = 0; i < count; i += 1) {
+      const object = new Graphics();
+      const radius = 1.8 + Math.random() * 3.3;
+      object.circle(0, 0, radius * 3).fill({ color, alpha: 0.05 });
+      object.circle(0, 0, radius).fill({ color, alpha: 0.92 });
+      object.position.set(x, y);
+      object.zIndex = 12000;
+      this.world.addChild(object);
+      const angle = (Math.PI * 2 * i) / count + Math.random() * 0.45;
+      const speed = 45 + Math.random() * 95;
+      const maxLife = 0.42 + Math.random() * 0.38;
+      this.bursts.push({
+        object,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed - 25,
+        life: maxLife,
+        maxLife,
+      });
+    }
+  }
+
+  private updateBursts(delta: number): void {
+    for (let i = this.bursts.length - 1; i >= 0; i -= 1) {
+      const burst = this.bursts[i];
+      if (!burst) continue;
+      burst.life -= delta;
+      burst.object.x += burst.vx * delta;
+      burst.object.y += burst.vy * delta;
+      burst.vy += 80 * delta;
+      burst.object.alpha = Math.max(0, burst.life / burst.maxLife);
+      if (burst.life <= 0) {
+        burst.object.destroy();
+        this.bursts.splice(i, 1);
+      }
+    }
   }
 
   private endGame(reason: GameResult['reason']): void {
