@@ -1,5 +1,4 @@
 import { AnimatedSprite, Assets, Container, Graphics, type Texture } from 'pixi.js';
-import { createStarLantern } from './objectsLegacy';
 
 const RAW_BASE = 'https://raw.githubusercontent.com/shorepine/kenney/main/2d/Toon%20Characters';
 
@@ -18,6 +17,32 @@ function frameUrls(index: number): string[] {
   return FRAME_IDS.map(
     (frame) => `${RAW_BASE}/${profile.folder}/Poses%20HD/character_${profile.prefix}_walk${frame}.png`,
   );
+}
+
+function starPoints(outer: number, inner: number): number[] {
+  const points: number[] = [];
+  for (let i = 0; i < 10; i += 1) {
+    const radius = i % 2 === 0 ? outer : inner;
+    const angle = -Math.PI / 2 + i * (Math.PI / 5);
+    points.push(Math.cos(angle) * radius, Math.sin(angle) * radius);
+  }
+  return points;
+}
+
+function createFestivalLantern(color: number): Container {
+  const group = new Container();
+  const halo = new Graphics();
+  halo.circle(0, 0, 44).fill({ color, alpha: 0.07 });
+  halo.circle(0, 0, 34).fill({ color, alpha: 0.08 });
+
+  const star = new Graphics();
+  star.poly(starPoints(30, 13)).fill({ color, alpha: 0.92 }).stroke({ color: 0xffd784, width: 4 });
+  star.poly(starPoints(20, 8)).stroke({ color: 0xffefb8, width: 1.5, alpha: 0.82 });
+  star.circle(0, 0, 5).fill(0xfff0bd);
+  star.moveTo(0, 31).lineTo(0, 47).stroke({ color: 0xe7ad55, width: 2.5 });
+  star.moveTo(-5, 46).lineTo(0, 57).lineTo(5, 46).stroke({ color: 0xe7ad55, width: 2 });
+  group.addChild(halo, star);
+  return group;
 }
 
 const ALL_CHARACTER_URLS = PROFILES.flatMap((_, index) => frameUrls(index));
@@ -66,7 +91,7 @@ export function createCharacter(index = 0, withLantern = true): CharacterArt {
   attachRunner(group, index);
   if (!group.runnerArt) {
     void preloadPromise.then(() => attachRunner(group, index)).catch(() => {
-      // Keep gameplay alive even if a third-party texture endpoint is temporarily unavailable.
+      // Keep gameplay alive even if the third-party texture endpoint is temporarily unavailable.
     });
   }
 
@@ -75,10 +100,9 @@ export function createCharacter(index = 0, withLantern = true): CharacterArt {
     pole.moveTo(33, -72).lineTo(58, -142).stroke({ color: 0xb88745, width: 4, alpha: 0.96 });
     group.addChild(pole);
 
-    const lantern = createStarLantern(
-      LANTERN_COLORS[((index % LANTERN_COLORS.length) + LANTERN_COLORS.length) % LANTERN_COLORS.length] ?? 0xff4d4f,
-      0.74,
-    );
+    const color = LANTERN_COLORS[((index % LANTERN_COLORS.length) + LANTERN_COLORS.length) % LANTERN_COLORS.length] ?? 0xff4d4f;
+    const lantern = createFestivalLantern(color);
+    lantern.scale.set(0.74);
     lantern.position.set(60, -151);
     group.addChild(lantern);
     group.lanternArt = lantern;
