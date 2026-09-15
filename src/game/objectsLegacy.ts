@@ -1,5 +1,6 @@
 import { Container, Graphics } from 'pixi.js';
 import { characterSvg, lanternSvg } from './characterArt';
+import { houseSvg } from './sceneryArt';
 
 const lanternColors = [0xff4d4f, 0xff9f43, 0xffd84d, 0xef5da8, 0x3ed6c4];
 
@@ -107,47 +108,53 @@ function createStarLantern(index: number, scale = 1): Container {
 
 function createHouse(index: number): Container {
   const group = new Container();
-  const facades = [0x74384a, 0x315b79, 0x85613d, 0x3d6357, 0x66477b];
-  const facade = colorAt(facades, index, 0x74384a);
-  const house = new Graphics();
-  house.roundRect(-112, -214, 224, 214, 14).fill(facade);
-  house.poly([-130, -214, 0, -274, 130, -214]).fill(0x452633).stroke({ color: 0xb96c5d, width: 4 });
-  house.rect(-92, -167, 76, 76).fill(0x16253e).stroke({ color: 0xe8ba75, width: 3 });
-  house.rect(16, -167, 76, 76).fill(0x16253e).stroke({ color: 0xe8ba75, width: 3 });
-  house.rect(-82, -157, 56, 56).fill({ color: 0xffcd78, alpha: 0.34 });
-  house.rect(26, -157, 56, 56).fill({ color: 0xffcd78, alpha: 0.28 });
-  house.roundRect(-37, -84, 74, 84, 8).fill(0x281e29).stroke({ color: 0xd2a064, width: 3 });
-  house.poly([-101, -91, 101, -91, 87, -63, -87, -63]).fill(index % 2 ? 0xe6af4e : 0xe75b57);
+
+  const shadow = new Graphics();
+  shadow.ellipse(0, 3, 130, 17).fill({ color: 0x07101f, alpha: 0.25 });
+  group.addChild(shadow);
+
+  const house = new Graphics().svg(houseSvg(index));
+  house.position.set(-140, -340);
   group.addChild(house);
-  const lantern = createStarLantern(index + 2, 0.42);
-  lantern.position.set(-78, -121);
-  group.addChild(lantern);
+
+  const festivalStar = createStarLantern(index + 2, 0.34);
+  festivalStar.position.set(index % 2 === 0 ? -102 : 101, -198);
+  group.addChild(festivalStar);
+
   return group;
 }
 
 export function createSceneryRow(index: number): Container {
   const row = new Container();
   const left = createHouse(index);
-  left.position.x = -410;
+  left.position.x = -398;
   const right = createHouse(index + 2);
-  right.position.x = 410;
+  right.position.x = 398;
   row.addChild(left, right);
+
   const wire = new Graphics();
-  wire.moveTo(-300, -220).lineTo(300, -220).stroke({ color: 0xc8a56b, width: 2, alpha: 0.72 });
+  wire.moveTo(-295, -229).bezierCurveTo(-100, -214, 100, -214, 295, -229).stroke({ color: 0xd6ad68, width: 2, alpha: 0.72 });
   row.addChild(wire);
+
   for (let i = 0; i < 5; i += 1) {
     const lantern = createStarLantern(index + i, 0.28);
-    lantern.position.set(-240 + i * 120, -220 + Math.sin(i * 1.3) * 8);
+    const x = -240 + i * 120;
+    const y = -222 + Math.sin(i * 1.3) * 7;
+    lantern.position.set(x, y);
     row.addChild(lantern);
   }
+
   const trees = new Graphics();
-  trees.rect(-330, -116, 12, 116).fill(0x4b382b);
-  trees.circle(-324, -136, 43).fill({ color: 0x173f39, alpha: 0.95 });
-  trees.circle(-355, -120, 28).fill({ color: 0x1f5245, alpha: 0.92 });
-  trees.rect(318, -116, 12, 116).fill(0x4b382b);
-  trees.circle(324, -136, 43).fill({ color: 0x173f39, alpha: 0.95 });
-  trees.circle(354, -120, 28).fill({ color: 0x1f5245, alpha: 0.92 });
+  trees.rect(-327, -111, 10, 111).fill(0x4b382b);
+  trees.circle(-322, -132, 38).fill({ color: 0x173f39, alpha: 0.95 });
+  trees.circle(-350, -119, 25).fill({ color: 0x2f6250, alpha: 0.94 });
+  trees.circle(-301, -111, 24).fill({ color: 0x235546, alpha: 0.94 });
+  trees.rect(317, -111, 10, 111).fill(0x4b382b);
+  trees.circle(322, -132, 38).fill({ color: 0x173f39, alpha: 0.95 });
+  trees.circle(350, -119, 25).fill({ color: 0x2f6250, alpha: 0.94 });
+  trees.circle(301, -111, 24).fill({ color: 0x235546, alpha: 0.94 });
   row.addChild(trees);
+
   return row;
 }
 
